@@ -61,6 +61,7 @@
 #include <uk/print.h>
 #include <uk/assert.h>
 #include <uk/atomic.h>
+#include <uk/libparam.h>
 
 #define TIMER_CNTR           0x40
 #define TIMER_MODE           0x43
@@ -95,6 +96,15 @@
 
 /* RTC wall time offset at monotonic time base. */
 static __u64 rtc_epochoffset;
+
+/* Monotonic time at boot; used with the boot_epoch override below. */
+static __u64 boot_time_base;
+
+/* Optional wall clock epoch supplied via the command line. Needed on VMMs
+ * that do not emulate an RTC (e.g. Firecracker).
+ */
+static __u64 boot_epoch;
+UK_LIBPARAM_PARAM(boot_epoch, __u64, "Wall clock epoch at boot (Unix seconds)");
 
 /*
  * TSC clock specific.
@@ -290,6 +300,7 @@ int tscclock_init(void)
 	 * time at boot.
 	 */
 	rtc_epochoffset = rtc_boot - time_base;
+	boot_time_base = time_base;
 
 	/*
 	 * Initialise i8254 timer channel 0 to mode 4 (one shot).
@@ -305,8 +316,15 @@ int tscclock_init(void)
 /*
  * Return epoch offset (wall time offset to monotonic clock start).
  */
+// __u64 tscclock_epochoffset(void)
+// {
+// 	return rtc_epochoffset;
+// }
 __u64 tscclock_epochoffset(void)
 {
+	if (boot_epoch)
+		return boot_epoch * UKARCH_NSEC_PER_SEC - boot_time_base;
+
 	return rtc_epochoffset;
 }
 
