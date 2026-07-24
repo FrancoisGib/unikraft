@@ -271,7 +271,8 @@ int uk_sys_clock_nanosleep(clockid_t clockid, int flags,
 			   const struct timespec *request,
 			   struct timespec *remain)
 {
-	if ((clockid == CLOCK_REALTIME) && !(flags & TIMER_ABSTIME))
+	if ((clockid == CLOCK_REALTIME || clockid == CLOCK_MONOTONIC)
+	    && !(flags & TIMER_ABSTIME))
 		return uk_sys_nanosleep(request, remain);
 
 	UK_WARN_STUBBED();
