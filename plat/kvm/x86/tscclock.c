@@ -61,7 +61,6 @@
 #include <uk/print.h>
 #include <uk/assert.h>
 #include <uk/atomic.h>
-#include <uk/libparam.h>
 
 #define TIMER_CNTR           0x40
 #define TIMER_MODE           0x43
@@ -97,14 +96,53 @@
 /* RTC wall time offset at monotonic time base. */
 static __u64 rtc_epochoffset;
 
-/* Monotonic time at boot; used with the boot_epoch override below. */
-static __u64 boot_time_base;
+/* KVM paravirtual wall clock MSRs */
+#define MSR_KVM_WALL_CLOCK 0x11
+#define MSR_KVM_WALL_CLOCK_NEW 0x4b564d00
+#define KVM_FEATURE_CLOCKSOURCE (1 << 0)
+#define KVM_FEATURE_CLOCKSOURCE2 (1 << 3)
 
-/* Optional wall clock epoch supplied via the command line. Needed on VMMs
- * that do not emulate an RTC (e.g. Firecracker).
- */
-static __u64 boot_epoch;
-UK_LIBPARAM_PARAM(boot_epoch, __u64, "Wall clock epoch at boot (Unix seconds)");
+struct pvclock_wall_clock {
+	volatile __u32 version;
+	volatile __u32 sec;
+	volatile __u32 nsec;
+} __attribute__((__packed__));
+
+static struct pvclock_wall_clock wall_clock_data __align(4);
+
+static __u64 pvclock_read_wall_clock(void)
+{
+	__u32 eax, ebx, ecx, edx;
+	__u32 features, msr, version;
+	__u64 wall_nsec;
+
+	uk_arch_x86_64_cpuid(0x40000000, 0, &eax, &ebx, &ecx, &edx);
+	if (eax < 0x40000001)
+		return 0;
+
+	uk_arch_x86_64_cpuid(0x40000001, 0, &features, &ebx, &ecx, &edx);
+
+	if (features & KVM_FEATURE_CLOCKSOURCE2)
+		msr = MSR_KVM_WALL_CLOCK_NEW;
+	else if (features & KVM_FEATURE_CLOCKSOURCE)
+		msr = MSR_KVM_WALL_CLOCK;
+	else
+		return 0;
+
+	/* Identity mapped at boot, so virt == phys */
+	uk_arch_x86_64_wrmsrl(msr, (__u64)(__uptr) & wall_clock_data);
+
+	do {
+		version = wall_clock_data.version;
+		__barrier();
+		wall_nsec = ((__u64)wall_clock_data.sec * UKARCH_NSEC_PER_SEC) +
+			    wall_clock_data.nsec;
+		__barrier();
+	} while ((wall_clock_data.version & 1) ||
+		 (version != wall_clock_data.version));
+
+	return wall_nsec;
+}
 
 /*
  * TSC clock specific.
@@ -242,8 +280,11 @@ int tscclock_init(void)
 	/*
 	 * Read RTC "time at boot". This must be done just before tsc_base is
 	 * initialised in order to get a correct offset below.
+	 * Try KVM pvclock first. Fall back to legacy RTC if pvclock is unavailable.
 	 */
-	rtc_boot = rtc_gettimeofday();
+	rtc_boot = pvclock_read_wall_clock();
+	if (!rtc_boot)
+		rtc_boot = rtc_gettimeofday();
 
 	/*
 	 * Attempt to retrieve TSC frequency via the hypervisor generic cpuid
@@ -300,7 +341,6 @@ int tscclock_init(void)
 	 * time at boot.
 	 */
 	rtc_epochoffset = rtc_boot - time_base;
-	boot_time_base = time_base;
 
 	/*
 	 * Initialise i8254 timer channel 0 to mode 4 (one shot).
@@ -316,15 +356,8 @@ int tscclock_init(void)
 /*
  * Return epoch offset (wall time offset to monotonic clock start).
  */
-// __u64 tscclock_epochoffset(void)
-// {
-// 	return rtc_epochoffset;
-// }
 __u64 tscclock_epochoffset(void)
 {
-	if (boot_epoch)
-		return boot_epoch * UKARCH_NSEC_PER_SEC - boot_time_base;
-
 	return rtc_epochoffset;
 }
 
