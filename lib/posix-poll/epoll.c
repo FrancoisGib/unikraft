@@ -115,7 +115,10 @@ static void epoll_event_callback(uk_pollevent set,
 		struct uk_pollq *upq = (struct uk_pollq *)tick->arg;
 
 		(void)uk_or(&ent->revents, set);
-		uk_pollq_set_n(upq, UKFD_POLLIN, IS_EDGEPOLL(ent));
+		// 0 to wake all the waiters on this epoll fd.
+		uk_pollq_set_n(upq, UKFD_POLLIN, 0);
+		
+		// uk_pollq_set_n(upq, UKFD_POLLIN, IS_EDGEPOLL(ent));
 		if (IS_ONESHOT(ent))
 			tick->mask = 0;
 	}
