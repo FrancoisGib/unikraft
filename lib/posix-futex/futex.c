@@ -216,23 +216,19 @@ static int futex_wake(uint32_t *uaddr, uint32_t val)
  * @param val		Number of waiters to wake
  * @param val2		Number of waiters to requeue (0-INT_MAX)
  * @param uaddr2	Target futex user address
- * @param val3		uaddr expected value
  *
  * @return
  *	>=0: on success, the number of tasks requeued or woken;
  *	<0: on error
  */
-static int futex_cmp_requeue(uint32_t *uaddr, uint32_t val, uint32_t val2,
-			     uint32_t *uaddr2, uint32_t val3)
+static int futex_requeue(uint32_t *uaddr, uint32_t val, uint32_t val2,
+			 uint32_t *uaddr2)
 {
 	unsigned long irqf;
 	struct uk_list_head *itr, *tmp;
 	struct uk_futex *f;
 	int woken_uaddr1;
 	uint32_t waiters_uaddr2 = 0;
-
-	if (!((uint32_t)val3 == uk_load_n(uaddr)))
-		return -EAGAIN;
 
 	/* Wake up val waiters on uaddr */
 	woken_uaddr1 = futex_wake(uaddr, val);
@@ -263,6 +259,18 @@ static int futex_cmp_requeue(uint32_t *uaddr, uint32_t val, uint32_t val2,
 	uk_lcpu_restore_irqf(irqf);
 
 	return woken_uaddr1 + waiters_uaddr2;
+}
+
+/**
+ * Same as futex_requeue but wakes only if the values in uaddr contains val3.
+ */
+static int futex_cmp_requeue(uint32_t *uaddr, uint32_t val, uint32_t val2,
+			     uint32_t *uaddr2, uint32_t val3)
+{
+	if (!((uint32_t)val3 == uk_load_n(uaddr)))
+		return -EAGAIN;
+
+	return futex_requeue(uaddr, val, val2, uaddr2);
 }
 
 /**
@@ -332,8 +340,10 @@ UK_LLSYSCALL_R_DEFINE(int, futex, uint32_t *, uaddr, int, futex_op,
 		return futex_wake(uaddr, val);
 
 	case FUTEX_FD:
-	case FUTEX_REQUEUE:
 		return -ENOSYS;
+
+	case FUTEX_REQUEUE:
+		return futex_requeue(uaddr, val, (unsigned long)timeout, uaddr2);
 
 	case FUTEX_CMP_REQUEUE:
 		return futex_cmp_requeue(uaddr, val, (unsigned long)timeout,
